@@ -1535,7 +1535,10 @@ function PassportsPage({
             />
           </div>
           <SelectInput value={status} onChange={setStatus} options={["Fresh", "At Risk", "Critical"]} />
-          <SelectInput value={location} onChange={setLocation} options={stores.map((s) => s.id === "DC" ? "DC" : s.name).map((_, i) => stores[i].id) as unknown as string[]} />
+          <select value={location} onChange={(e) => setLocation(e.target.value)} onFocus={focusOn} onBlur={(e) => focusOff(e)} style={{ ...inputStyle, paddingRight: 28, appearance: "none", backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center" }}>
+            <option value="">All locations</option>
+            {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
           <SelectInput value={category} onChange={setCategory} options={["Produce", "Dairy", "Bakery", "Ready Meals", "Meat & Fish", "Frozen"]} />
         </div>
         <div style={{ marginTop: 10, fontSize: 13, color: C.muted, display: "flex", justifyContent: "space-between" }}>
