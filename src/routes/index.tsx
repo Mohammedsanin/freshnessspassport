@@ -1,29 +1,26 @@
 import { createFileRoute } from "@tanstack/react-router";
+import FreshnessPassport from "@/components/FreshnessPassport";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Your App" },
-      { name: "description", content: "Replace this with a one-sentence description of your app." },
-      { property: "og:title", content: "Your App" },
-      { property: "og:description", content: "Replace this with a one-sentence description of your app." },
+      { title: "Freshness Passport — Food Waste Intelligence for Grocery Retailers" },
+      {
+        name: "description",
+        content:
+          "Operational intelligence platform tracking remaining shelf life, cold-chain integrity and waste root-causes across every store and DC.",
+      },
+      { property: "og:title", content: "Freshness Passport" },
+      {
+        property: "og:description",
+        content:
+          "Operational intelligence platform tracking remaining shelf life, cold-chain integrity and waste root-causes across every store and DC.",
+      },
     ],
   }),
-  component: Index,
+  component: Page,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
-function Index() {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
-  );
+function Page() {
+  return <FreshnessPassport />;
 }
