@@ -1,137 +1,95 @@
-# Freshness Passport — Final Build Plan (v3)
+# Freshness Passport — Interconnection Layer (v4)
 
-Premium single-file React SaaS prototype: 6 dashboard pages, passport drawer, full Store Profile page, Store creation + Passport creation modals, toast system. All v2 decisions stand; this revision pins down 12 previously-undefined behaviours.
+Refactor `src/components/FreshnessPassport.tsx` from page-local state to a single `useReducer` source of truth, so every create/complete/filter/time action ripples across all 6 pages, both modals, drawer, and store profile in real time. Also resolves the 10 named gaps.
 
-## File structure (unchanged)
+## 1. State + reducer (top of file)
 
-- `src/routes/index.tsx` — SEO `head()` + render app component.
-- `src/routes/__root.tsx` — add Inter via Google Fonts `<link>` in `head()`.
-- `src/components/FreshnessPassport.tsx` — entire app (~2400 lines), seed data + helpers at top.
-- `bun add recharts` if missing.
+Replace scattered `useState` with one `useReducer`:
 
-Palette/typography per spec; arbitrary Tailwind values (`bg-[#1B3A6B]`, etc.) and inline styles for exact hex matches.
-
-## Global state
-
-`activePage`, `activeStore`, `storeProfileId`, `drawerBatchId`, `storeModalOpen`, `passportModalOpen`, `isSidebarOpen` (mobile), `isLoading` (per-page skeleton), `stores[]`, `batches[]`, `tasks[]`, `activity[]`, `toasts[]`, `tooltipsOpen: Set<string>`, `newPassportFlashId`.
-
-## App shell
-
-- 240px sidebar (Overview, Passports, RSL Monitor, Waste Analytics, Action Engine, Impact). Active: `#EFF6FF` bg, 3px `#2563EB` left accent.
-- Header: hamburger (mobile only) + leaf logo + "Freshness Passport"; right side `+ Add Store`, store selector dropdown (DC + 5, each with "→ View Store Profile"), bell w/ `3` dot, `AV` avatar.
-- Main: `#F8FAFC`, 32px padding.
-- Outer wrapper `position: relative; min-height: 100vh` to anchor the absolute-positioned toast stack.
-
-### FIX 1 — Mobile sidebar drawer
-At <768px sidebar hidden; `≡` in header top-left opens it as a 240px left-slide drawer over content with `rgba(0,0,0,0.4)` overlay (clicking overlay closes). X close inside top-right. 200ms ease transform. Selecting any nav item sets `isSidebarOpen = false`. `isSidebarOpen` lives in global state.
-
-## Reusable primitives
-
-`Card`, `SectionHeader(title, tooltipKey)`, `StatusBadge`, `KpiCard`, `PrimaryButton`, `SecondaryButton`, `DataTable`, `Modal`, `TabPills`, `FormField`, `Input`/`Select`/`Textarea`/`RadioPills`/`CheckboxPills`/`Toggle`/`Stepper`, `Avatar`, `Toast`, `Drawer`, `FreshnessGauge` (SVG).
-
-Form-field styling per spec (40px, `#E2E8F0` border, 8px radius, focus `#2563EB` + 3px rgba(37,99,235,.12) ring, error `#DC2626`; labels 13px/600/`#374151`; required `*`).
-
-## Helpers (defined at top of file)
-
-### FIX 9 — RSL calculation
+```text
+state = {
+  activePage, previousPage, activeStoreFilter, storeProfileId,
+  drawerBatchId, taskHighlightId,
+  storeModalOpen, passportModalOpen: false | {prefilledStoreId},
+  isSidebarOpen, bellOpen, storeDropdownOpen, activityLogOpen,
+  tooltipsOpen: Set<string>, newPassportFlashId,
+  toasts, stores, batches, tasks, activity,
+  timeOffset, notificationsReadAt
+}
 ```
-computeRSL(batch) → { rslDays, score }
-  daysSinceProduction = floor((Date.now() - productionDate)/86400000)
-  tempPenalty = tempExcursion ? tempPenaltyDays : 0
-  dwellPenalty = max(0, dwellDays - 2)
-  rslDays = max(0, baseShelfLife - daysSinceProduction - tempPenalty - dwellPenalty)
-  score   = round(rslDays / baseShelfLife * 100)
 
-freshnessColor(score): ≥75 #16A34A, ≥45 #D97706, else #DC2626
-rslToAction(days): <1 50% markdown; 1–2 front shelf + markdown;
-                   2–3 FEFO; 3–5 monitor; >5 none
-```
-Both passport table and drawer call `computeRSL` so the values match.
+Actions: `NAVIGATE`, `SET_STORE_FILTER`, `OPEN_STORE_PROFILE`, `BACK_FROM_PROFILE`, `OPEN_DRAWER`, `CLOSE_DRAWER`, `OPEN_STORE_MODAL`, `OPEN_PASSPORT_MODAL`, `CLOSE_MODALS`, `ADD_STORE`, `ADD_BATCH`, `ADD_TASK`, `UPDATE_TASK`, `ADD_ACTIVITY`, `PUSH_TOAST`, `DISMISS_TOAST`, `TOGGLE_SIDEBAR`, `TOGGLE_BELL`, `TOGGLE_TIP`, `CLEAR_FLASH`, `HIGHLIGHT_TASK`, `ADVANCE_TIME`, `RESET_TIME`, `MARK_NOTIFS_READ`, `OPEN_ACTIVITY_LOG`.
 
-### FIX 12 — nextBatchId()
-Scans `batches[]` for IDs matching `#A(\d+)`, returns `#A${(max+1).padStart(2,'0')}`. Called when passport modal opens to pre-fill Batch ID; user may override.
+Each store/batch/task creator reducer case also pushes an activity event and any cascading task auto-generation in the same reducer to keep cascades atomic.
 
-Plus `formatGBP`, `formatDate('DD Mon YYYY')`, `formatPct(n)` (1 dp), `nextStoreId()`.
+Pass `state` + `dispatch` down to every page as props — no per-page data hooks.
 
-## Pages
+## 2. Selectors (pure functions used inline in render)
 
-1. **Overview** — 4 KPIs, freshness-by-store BarChart, waste-driver donut, 6-event activity feed.
-2. **Product Passports** — search + 3 filter dropdowns, table, `New Passport +` top-right, drawer on "View".
-3. **RSL Monitor** — 3 summary cards, 12-row urgency table with colored left-border accents + auto actions, 14-day AreaChart.
-4. **Waste Analytics** — driver BarChart, category donut, 10-row incidents log, 8-week multi-line trend (dual axis).
-5. **Action Engine** — 4 summary cards + 3-column Kanban (see FIX 6).
-6. **Impact Report** — 4 hero metrics, 12-month ComposedChart, 6-month stacked BarChart, ESG certificate card (Export PDF / Share — see FIX 11), store league with sparklines + 🏆.
+`now(state) = Date.now() + state.timeOffset`, then:
+`getBatchesForStore`, `getAtRiskBatches`, `getWasteThisWeek`, `getFreshnessScore`, `getTasksForStore`, `getPendingTaskCount`, `getOverdueTasks`, `getActiveBatchCount`, `getNotifications(state)` (derived from at-risk batches, overdue tasks, temp excursions — never stored).
 
-### FIX 2 — Recharts sizing
-Every chart wrapped in `<ResponsiveContainer width="100%" height={H}>`:
-- trend lines / area: 260; donut/pie: 240; horizontal driver bar: 220; 6-month stacked: 280; 8-week multi-line: 260; 12-month composed: 300.
-- Freshness gauge is hand-rendered SVG 180×180 with `r=70`, `C = 2π·70`, `strokeDashoffset = C·(1 - score/100)`, color via `freshnessColor`.
+`computeRSL` rewritten to take `(batch, nowMs)` and is called everywhere with `now(state)` so the time-simulator ripples through every score.
 
-### FIX 5 — Passport filter logic
-`useMemo([batches, search, status, location, category])` returns AND-filtered list. Search matches product name, SKU, batch ID case-insensitively. Below filters: `"Showing X of Y passports"` in `#94A3B8` 13px. Zero results → empty state card: 48px package icon `#94A3B8`, heading "No passports match your filters", `Clear all filters` link in `#2563EB`.
+## 3. Header
 
-### FIX 6 — Action Engine state model
-`task.status ∈ 'todo'|'inprogress'|'done'`. TO DO cards show `Start Task` → `inprogress`; IN PROGRESS show `Mark Complete` → `done`. Done cards: opacity .65, green check top-right, no buttons. Column counts derive from filtered tasks live. Overdue badge: any non-done task with `assignmentDate` > 2 days ago gets red `OVERDUE` pill (does not move column). No DnD.
+- Hamburger (mobile) → `TOGGLE_SIDEBAR`.
+- Store dropdown (click-outside via `useRef`+`mousedown`): each store has “→ View Store Profile”; selecting an item sets `activeStoreFilter`.
+- New `⏩ Simulate +1 Day` / `↺ Reset Time` pills.
+- Bell: badge = notifications created after `notificationsReadAt`; click opens 280px panel listing live notifications (color-coded left border), each row navigates (drawer / actions+highlight). “Mark all as read” sets `notificationsReadAt = now`.
 
-## Passport drawer
+## 4. Breadcrumb bar (36px, below header)
 
-### FIX 4 — Drawer close behaviour
-- ESC key closes (useEffect adds `keydown` listener, cleanup on unmount).
-- Click overlay closes.
-- 250ms CSS transition on `transform: translateX(100% → 0)`.
-- Body scroll locked (`document.body.style.overflow='hidden'`) while open; restored on close.
-- Width 560px desktop, `calc(100vw - 40px)` mobile.
+Reads `activePage`, `activeStoreFilter`, `storeProfileId`, `drawerBatchId` and renders clickable segments (last segment plain text). Filter chip has an `×` that clears to `'all'`.
 
-Sections: Summary grid, Temperature LineChart + threshold ReferenceLine, Movement timeline, RSL breakdown progress bar (uses `computeRSL`).
+## 5. Pages — all consume selectors
 
-## Store Profile full-page
+- **Overview**: KPI cards, freshness-by-store bar (filtered store highlighted, others 0.3 opacity), waste donut, activity feed (top 8) with “View all activity” → modal listing full `activity[]`. Each activity row with `batchId` opens drawer on click.
+- **Passports**: in-page store filter is bound to `activeStoreFilter` (writes via dispatch). Search + status + category filters local. Empty state + “Clear all filters”. New row shows `fp-flash-row` class while `id === newPassportFlashId`.
+- **RSL Monitor**: rows filtered + sorted by RSL asc. Each row with rsl<5 and no existing task shows `→ Create Task` button → dispatch `ADD_TASK` + activity; button swaps to `Task Created ✓`. rsl<2 also pushes red toast.
+- **Waste Analytics**: batch IDs are blue links → `OPEN_DRAWER`.
+- **Action Engine**: 3-col desktop / stacked-with-colored-left-border mobile. Cards filtered by store; in `'all'` mode each card shows store badge. Overdue pill auto-applied. Complete → `UPDATE_TASK done` + activity + impact metric increments handled in reducer.
+- **Impact**: hero metrics + charts filter by store. League rows are blue links → `OPEN_STORE_PROFILE` (sets `previousPage='impact'`). Selected store row highlighted `#EFF6FF`. Print: `no-print` on sidebar/header/breadcrumb/buttons/league/charts; `print-only` block inside ESG card with store name + generated date.
 
-### FIX 3 — Back navigation
-Top of page: `← Back to Dashboard` text button (`#2563EB` 13px/500). Click → `storeProfileId = null` and `activePage = 'overview'`. On open, call `window.history.pushState({storeProfileId}, '', '')`; `popstate` listener clears `storeProfileId` so browser back works.
+## 6. Store Profile (full page)
 
-Header card per spec (80px logo, name, ID pill, tier badge, active-since, address, manager, Edit + `+ New Passport`). "?" tooltip with the exact Store Profile copy. 4 KPI cards. 4 tabs: Overview (activity, top-3 drivers mini bar, large gauge), Products (filtered passport table + `New Passport +` pre-filled with this store), Performance (8-week line + dotted benchmark, weekly RSL table, best/worst category cards), Actions (pending + completed history + per-staff completion progress bars).
+- Back button → `BACK_FROM_PROFILE` restores `previousPage`.
+- KPI cards are clickable → set page + filter + clear `storeProfileId`.
+- Tabs: Overview / Products / Performance / Actions read from selectors filtered to `storeProfileId`. `+ New Passport` → `OPEN_PASSPORT_MODAL({prefilledStoreId})`.
 
-## Modals
+## 7. Modals
 
-Shared shell: `rgba(0,0,0,0.35)` overlay, 680px white card, 16px radius, 40px padding, uppercase top-left title, X close, footer (`* Required fields` left; `Cancel` + primary right). Tab pills (`#1B3A6B` active / transparent inactive); tab switching preserves state; incomplete tabs show amber dot.
+Single `<Modal>` shell. Store modal `ADD_STORE` → auto `OPEN_STORE_PROFILE(newId)`. Passport modal supports `prefilledStoreId` (Assignment tab Location radio pre-selected to `store`, dropdown visible & set). Both modals validate, push toast, close, dispatch.
 
-### Store Profile modal
-Tabs: `Store Details` / `Operations` / `Preferences`. Fields exactly per v2 spec (avatar left, fields right).
+## 8. Drawer
 
-### Product Passport modal
-Tabs: `Batch Details` / `Cold Chain` / `Assignment`. Live temp-range pill recomputes on every keystroke (green "Within Range" / red "⚠ Excursion Detected"). Batch ID field has `Auto-generate` link calling `nextBatchId()`. Priority radio pills color-coded when selected.
+Renders at app-root level (not inside Passports page) so it overlays any page. Body scroll lock while open. RSL Breakdown footer shows blue “Create Action Task →” banner (or green “already created → View in Action Engine” when task exists; click closes drawer, navigates to actions, sets `taskHighlightId`).
 
-### FIX 7 — Avatar upload (both modals)
-Pencil button triggers hidden `<input type="file" accept="image/*">`. On change, `FileReader.readAsDataURL` → store base64 in `formState.logoUrl`. If present render `<img style="object-fit:cover">` inside circle, else default icon (building for store, box for product). base64 persists into `stores[]` / `batches[]`.
+Temperature chart `ReferenceLine y={batch.maxTemp}` labeled `Max: {n}°C`.
 
-### Validation
-On Save: validate required (store: name, ID, city, manager; passport: name, SKU, batch ID, category, base shelf life). Red inline error below offending field; red banner top of modal: "Please complete N required fields"; auto-scroll to first error. On success → close → toast → list updates → in passports case, new row prepended with 3s blue-left-border flash via `newPassportFlashId` + CSS transition.
+## 9. Centralised ESC handler
 
-## FIX 8 — Toast stack
+Single app-root `useEffect` keydown listener with priority: modal → modal → drawer → bell → sidebar. Remove per-component ESC.
 
-Container is the **last child of the app wrapper**, `position: absolute; top:0; right:0; z-index:9999` (the outer app div is `position: relative`). Each toast: white card, 4px left border (success `#16A34A` / error `#DC2626` / info `#2563EB`), 8px radius, padding 12×16, 13px, min 280 / max 360px. Newest on top. Each toast schedules its own 3s `setTimeout` removing it by id. Manual X button.
+## 10. Gap fixes inline
 
-## FIX 10 — Loading skeleton
+- **G1**: explicit TS types (`Store`, `Batch`, `Task`, `Activity`) already exist; extend to match spec (`alertPrefs`, `rslThreshold`, etc.), default values populated.
+- **G2**: `ReferenceLine y={batch.maxTemp}` with label.
+- **G3**: click-outside via `useRef`+`mousedown` for store dropdown and bell panel.
+- **G4**: inject `@keyframes fp-flash` + `.fp-flash-row` class; auto `CLEAR_FLASH` after 3 s.
+- **G5**: Kanban grid `md:grid-cols-3` else stacked with `border-l-[3px]` per status.
+- **G6**: `no-print` on shell + extras; `print-only` block inside ESG card.
+- **G7**: freshness gauge — two arcs (bg + fg), clamp `score` to `[2,98]`, center `XX/100` + “Freshness Score” caption.
+- **G8**: `passportModalOpen` typed `false | {prefilledStoreId}`.
+- **G9**: `timeAgo(ts)` helper, seed activity timestamps as `Date.now() - offsetMs`.
+- **G10**: centralised ESC stack (see §9).
 
-`isLoading` true for 600ms after first mount (and on page switch to a heavy page). While loading render skeleton **of the active page only** — shell stays interactive. Skeleton blocks: `bg-[#E2E8F0]` rounded rects with global `@keyframes fp-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }` and `animation: fp-pulse 1.4s ease infinite` (keyframes injected once via a top-level `<style>` tag in the component). Layout mirrors real page: 4 KPI skeletons in grid, 2 chart boxes at correct heights, 6 table-row skeletons.
+## 11. Time simulation effects
 
-## FIX 11 — Impact actions
+`ADVANCE_TIME` reducer also scans batches: any batch crossing `rslDays < 3` for the first time without an existing task generates one and pushes activity. Batches reaching `rslDays===0` push a `waste_logged` activity event.
 
-- `Export PDF`: `window.print()`. Inject a `<style>@media print { .no-print { display:none } ... }</style>`; sidebar, header, all buttons, nav get `no-print`; only ESG certificate + hero metrics render.
-- `Share with Sustainability Team`: if `navigator.share` available call it with `{title, text, url: location.href}`; else `navigator.clipboard.writeText(url)` and push blue info toast "Link copied to clipboard".
+## 12. Verification checklist
 
-## Tooltip registry
+Same as the user’s final checklist: switch store ripples 6 pages, create store→profile auto-open, create passport→flash + RSL sort + activity + auto-task if urgent, complete task→impact metrics increment, RSL `Create Task` button, drawer over analytics, KPI navigation, league link round-trip, bell live + click navigates, simulate-day cascades, breadcrumb correctness, ESC priority stack.
 
-Map of feature id → spec copy (one per page + every section heading + Store Profile header). `SectionHeader` reads from it; blue `?` toggles light-blue panel (border-left 3px `#2563EB`, text `#1B3A6B`).
-
-## Seed data (top of file)
-
-`STORES` (DC + 5), `BATCHES` (~20 with category, location, productionDate, baseShelfLife, dwellDays, tempExcursion, tempPenaltyDays, tempHistory[]), `WASTE_INCIDENTS`, `TASKS`, `ACTIVITY`, `RSL_TREND_14D`, `WASTE_TREND_8W`, `MONTHLY_IMPACT_12M`, `INTERVENTION_STACK_6M`, `STORE_LEAGUE`.
-
-## Out of scope
-
-No backend, routing, auth, shadcn, Lucide (icons inline SVG / Unicode), or tests.
-
-## Verification
-
-Dev build succeeds → preview at 1280px and 768px → click every nav item, open passport drawer (test ESC + overlay close + body lock), open store profile (test Back button + browser back), toggle a tooltip, apply filters (test empty state), Start / Complete tasks (verify counts + overdue), open + submit both modals (validation, toast, list flash, avatar upload), Export PDF print preview, Share button toast.
+Out of scope: backend, routing changes, new dependencies (still recharts only).
