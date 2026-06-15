@@ -1599,6 +1599,13 @@ function Drawer({ state, dispatch }: { state: State; dispatch: Dispatch<Action> 
               )}
             </div>
           )}
+
+          <h4 className="text-[13px] font-semibold mt-5 mb-2" style={{ color: C.text }}>Source Document</h4>
+          {batch.sourceDocument ? (
+            <SourceDocSection doc={batch.sourceDocument} />
+          ) : (
+            <div className="text-[13px] italic" style={{ color: C.muted }}>Manually entered</div>
+          )}
         </div>
       </div>
     </div>
