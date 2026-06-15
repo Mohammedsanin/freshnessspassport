@@ -129,6 +129,14 @@ type Batch = {
   recommendedAction?: string;
   logoUrl?: string | null;
   createdAt?: number;
+  sourceDocument?: {
+    fileName: string;
+    invoiceNumber: string | null;
+    scannedAt: number;
+    confidence: "high" | "medium" | "low";
+    mediaType: string;
+    dataUrl: string;
+  } | null;
 };
 
 type Task = {
@@ -153,7 +161,8 @@ type ActivityType =
   | "temp_excursion"
   | "waste_logged"
   | "store_created"
-  | "rsl_alert";
+  | "rsl_alert"
+  | "bill_scanned";
 
 type Activity = {
   id: string;
@@ -653,7 +662,7 @@ const FreshnessGauge = ({ score, size = 180 }: { score: number; size?: number })
    ============================================================ */
 const Modal = ({ title, onClose, children, footer, banner }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; banner?: ReactNode }) => (
   <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 no-print" style={{ background: "rgba(0,0,0,0.35)" }} onClick={onClose}>
-    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[680px] max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+    <div data-modal-scroll="true" className="bg-white rounded-2xl shadow-2xl w-full max-w-[680px] max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center justify-between p-6 pb-4">
         <h2 className="text-[13px] font-bold uppercase tracking-wider" style={{ color: C.primary }}>{title}</h2>
         <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-slate-100 text-[18px]" style={{ color: C.text2 }}>×</button>
@@ -866,6 +875,73 @@ function nextBatchId(batches: Batch[]) {
   return `#A${String(max + 1).padStart(2, "0")}`;
 }
 
+const CATEGORY_SHELF: Record<string, number> = {
+  Produce: 7, Dairy: 10, Bakery: 5, "Ready Meals": 4,
+  "Meat & Fish": 3, Frozen: 90, "Dry Goods": 180,
+};
+const VALID_CATEGORIES = ["Produce", "Dairy", "Bakery", "Ready Meals", "Meat & Fish", "Frozen", "Dry Goods"];
+const PROCESS_MSGS = [
+  "Reading document...",
+  "Identifying products...",
+  "Extracting batch details...",
+  "Mapping to passport fields...",
+];
+
+// Parse "DD-MM-YYYY" or "DD/MM/YYYY" → "YYYY-MM-DD" (for <input type="date">)
+function parseScannedDate(s: string | null | undefined): string | null {
+  if (!s || typeof s !== "string") return null;
+  const m = s.trim().match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+  if (!m) {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    return null;
+  }
+  const dd = m[1].padStart(2, "0");
+  const mm = m[2].padStart(2, "0");
+  let yyyy = m[3];
+  if (yyyy.length === 2) yyyy = "20" + yyyy;
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = r.result as string;
+      resolve(s.split(",")[1] || "");
+    };
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+type ExtractedProduct = {
+  productName: string | null;
+  sku: string | null;
+  batchId: string | null;
+  category: string | null;
+  units: number | null;
+  weight: string | null;
+  supplier: string | null;
+  origin: string | null;
+  productionDate: string | null;
+  printedExpiry: string | null;
+  baseShelfLife: number | null;
+  storageTemp: number | null;
+  deliveryDate: string | null;
+  invoiceNumber: string | null;
+  confidence?: "high" | "medium" | "low";
+};
+
 function PassportModal({ state, dispatch }: { state: State; dispatch: Dispatch<Action> }) {
   const modal = state.passportModalOpen;
   if (!modal) return null;
@@ -885,6 +961,30 @@ function PassportModal({ state, dispatch }: { state: State; dispatch: Dispatch<A
   const fileRef = useRef<HTMLInputElement>(null);
   const upd = (k: string, v: any) => setForm((f) => ({ ...f, [k]: v }));
 
+  // Bill scanner state
+  type ScanState = "idle" | "preview" | "loading" | "error" | "results" | "multi" | "nodata";
+  const [scanState, setScanState] = useState<ScanState>("idle");
+  const [scanFile, setScanFile] = useState<File | null>(null);
+  const [scanDataUrl, setScanDataUrl] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [extracted, setExtracted] = useState<ExtractedProduct | null>(null);
+  const [extractedList, setExtractedList] = useState<ExtractedProduct[] | null>(null);
+  const [extractionConfidence, setExtractionConfidence] = useState<"high" | "medium" | "low">("medium");
+  const [extractedInvoiceNo, setExtractedInvoiceNo] = useState<string | null>(null);
+  const [processIdx, setProcessIdx] = useState(0);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [flashedFields, setFlashedFields] = useState<Set<string>>(new Set());
+  const [lowConfFields, setLowConfFields] = useState<Set<string>>(new Set());
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const billFileRef = useRef<HTMLInputElement>(null);
+
+  // Cycle processing messages
+  useEffect(() => {
+    if (scanState !== "loading") return;
+    const id = setInterval(() => setProcessIdx((i) => (i + 1) % PROCESS_MSGS.length), 1200);
+    return () => clearInterval(id);
+  }, [scanState]);
+
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -895,28 +995,223 @@ function PassportModal({ state, dispatch }: { state: State; dispatch: Dispatch<A
 
   const tempInRange = form.currentTemp <= form.maxTemp;
 
-  const create = () => {
+  const acceptFile = async (f: File) => {
+    setScanError(null);
+    if (f.size > 10 * 1024 * 1024) {
+      setScanError("File too large. Maximum size is 10MB.");
+      setScanState("error");
+      return;
+    }
+    const okTypes = ["application/pdf", "image/jpeg", "image/png"];
+    if (!okTypes.includes(f.type)) {
+      setScanError("Please upload a PDF, JPG, or PNG file.");
+      setScanState("error");
+      return;
+    }
+    const url = await fileToDataUrl(f);
+    setScanFile(f);
+    setScanDataUrl(url);
+    setScanState("preview");
+  };
+
+  const onBillSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) acceptFile(f);
+    e.target.value = "";
+  };
+
+  const clearScan = () => {
+    setScanFile(null); setScanDataUrl(null); setScanState("idle");
+    setScanError(null); setExtracted(null); setExtractedList(null);
+    setExtractedInvoiceNo(null);
+  };
+
+  const runExtraction = async () => {
+    if (!scanFile) return;
+    setScanState("loading");
+    setProcessIdx(0);
+    try {
+      const { scanBill } = await import("@/lib/scan-bill.functions");
+      const base64 = await fileToBase64(scanFile);
+      const result = await scanBill({
+        data: {
+          base64,
+          mediaType: scanFile.type as "application/pdf" | "image/jpeg" | "image/png",
+          fileName: scanFile.name,
+        },
+      });
+      const ex: any = result.extracted;
+
+      if (ex && ex.multiProduct && Array.isArray(ex.products) && ex.products.length > 1) {
+        setExtractedList(ex.products as ExtractedProduct[]);
+        setExtractedInvoiceNo(ex.invoiceNumber ?? null);
+        setExtractionConfidence((ex.confidence as any) || "medium");
+        setScanState("multi");
+        return;
+      }
+
+      const single: ExtractedProduct = (ex && ex.multiProduct && ex.products?.[0]) || ex;
+      const nonNullCount = single ? Object.values(single).filter((v) => v !== null && v !== "" && v !== undefined).length : 0;
+      const conf = (single?.confidence as any) || (nonNullCount > 6 ? "high" : nonNullCount > 3 ? "medium" : "low");
+
+      if (!single || nonNullCount === 0) {
+        setScanState("nodata");
+        return;
+      }
+      setExtracted(single);
+      setExtractedInvoiceNo(single.invoiceNumber ?? null);
+      setExtractionConfidence(conf);
+      setScanState("results");
+
+      // Activity event
+      dispatch({
+        type: "ADD_ACTIVITY",
+        activity: {
+          id: uid(), ts: Date.now(), type: "bill_scanned",
+          text: `Delivery bill scanned — ${nonNullCount} fields extracted — ${single.productName || "Unknown product"} — Invoice ${single.invoiceNumber || "N/A"}`,
+          storeId: form.location === "store" ? form.storeSelect : "DC",
+        },
+      });
+    } catch (err: any) {
+      console.error(err);
+      setScanError(err?.message || "Could not read the document. Please try again.");
+      setScanState("error");
+    }
+  };
+
+  const flashFields = (keys: string[]) => {
+    setFlashedFields(new Set(keys));
+    setTimeout(() => setFlashedFields(new Set()), 900);
+  };
+
+  const fillFormWith = (ex: ExtractedProduct) => {
+    const filled: Record<string, any> = {};
+    const lowConf: string[] = [];
+    if (ex.productName) filled.product = ex.productName;
+    if (ex.sku) filled.sku = ex.sku;
+    filled.batchId = ex.batchId || nextBatchId(state.batches);
+    if (ex.category && VALID_CATEGORIES.includes(ex.category)) filled.category = ex.category;
+    if (typeof ex.units === "number") filled.units = ex.units;
+    if (ex.weight) filled.unitSize = ex.weight;
+    if (ex.supplier) filled.supplier = ex.supplier;
+    if (ex.origin) filled.origin = ex.origin;
+    const pd = parseScannedDate(ex.productionDate);
+    if (pd) filled.productionDate = pd;
+    const pe = parseScannedDate(ex.printedExpiry);
+    if (pe) filled.printedExpiry = pe;
+    if (typeof ex.baseShelfLife === "number") filled.baseShelfLife = ex.baseShelfLife;
+    else if (filled.category) filled.baseShelfLife = CATEGORY_SHELF[filled.category] || 7;
+    if (typeof ex.storageTemp === "number") filled.storageTemp = ex.storageTemp;
+    const dd = parseScannedDate(ex.deliveryDate);
+    if (dd) filled.entryPoint = dd;
+
+    setForm((f) => ({ ...f, ...filled }));
+    const filledKeys = Object.keys(filled).filter((k) => k !== "batchId" || !!ex.batchId);
+    if (extractionConfidence === "low") filledKeys.forEach((k) => lowConf.push(k));
+    setLowConfFields(new Set(lowConf));
+    flashFields(filledKeys);
+    setExtractedInvoiceNo(ex.invoiceNumber ?? extractedInvoiceNo);
+
+    const n = filledKeys.length;
+    const msg = extractionConfidence === "high"
+      ? `✓ ${n} fields filled from your bill. Review and save when ready.`
+      : extractionConfidence === "medium"
+      ? `✓ ${n} fields filled. Some fields need your review — highlighted in amber.`
+      : `⚠ Only ${n} fields could be extracted. Please complete the remaining fields manually.`;
+    setSuccessMsg(msg);
+    setTab("batch");
+    setScanState("idle");
+
+    // scroll modal top
+    requestAnimationFrame(() => {
+      const sc = document.querySelector('[data-modal-scroll="true"]');
+      if (sc) sc.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  };
+
+  const fieldStyle = (key: string, err?: boolean): CSSProperties => {
+    const base = inputStyle(err);
+    if (lowConfFields.has(key)) return { ...base, border: `1.5px solid ${C.amber}` };
+    return base;
+  };
+  const fieldClass = (key: string) => `${inputCls} ${flashedFields.has(key) ? "fp-field-fill" : ""}`;
+
+  const create = (overrides?: Partial<typeof form> & { sourceDoc?: Batch["sourceDocument"] }) => {
+    const cur = overrides ? { ...form, ...overrides } : form;
     const e: Record<string, string> = {};
-    if (!form.product) e.product = "Required";
-    if (!form.sku) e.sku = "Required";
-    if (!form.batchId) e.batchId = "Required";
-    if (!form.baseShelfLife) e.baseShelfLife = "Required";
+    if (!cur.product) e.product = "Required";
+    if (!cur.sku) e.sku = "Required";
+    if (!cur.batchId) e.batchId = "Required";
+    if (!cur.baseShelfLife) e.baseShelfLife = "Required";
     setErrors(e);
-    if (Object.keys(e).length) return;
-    const storeId = form.location === "dc" ? "DC" : form.location === "transit" ? "DC" : form.storeSelect;
+    if (Object.keys(e).length) return false;
+    const storeId = cur.location === "dc" ? "DC" : cur.location === "transit" ? "DC" : cur.storeSelect;
+    const tIn = cur.currentTemp <= cur.maxTemp;
     const batch: Batch = {
-      id: form.batchId, product: form.product, sku: form.sku, category: form.category, storeId,
-      productionDate: new Date(form.productionDate).getTime(),
-      printedExpiry: new Date(form.printedExpiry).getTime(),
-      units: form.units, unitSize: form.unitSize, supplier: form.supplier, origin: form.origin,
-      baseShelfLife: form.baseShelfLife, dwellDays: 0,
-      tempExcursion: !tempInRange, tempPenaltyDays: tempInRange ? 0 : 1,
-      maxTemp: form.maxTemp, storageTemp: form.storageTemp,
-      tempHistory: tempHist(form.storageTemp), monitoringMethod: form.monitoringMethod,
-      entryPoint: form.entryPoint, assignedStaff: form.assignedStaff,
-      priority: form.priority, recommendedAction: form.actionType, logoUrl: form.logoUrl, createdAt: Date.now(),
+      id: cur.batchId, product: cur.product, sku: cur.sku, category: cur.category, storeId,
+      productionDate: new Date(cur.productionDate).getTime(),
+      printedExpiry: new Date(cur.printedExpiry).getTime(),
+      units: cur.units, unitSize: cur.unitSize, supplier: cur.supplier, origin: cur.origin,
+      baseShelfLife: cur.baseShelfLife, dwellDays: 0,
+      tempExcursion: !tIn, tempPenaltyDays: tIn ? 0 : 1,
+      maxTemp: cur.maxTemp, storageTemp: cur.storageTemp,
+      tempHistory: tempHist(cur.storageTemp), monitoringMethod: cur.monitoringMethod,
+      entryPoint: cur.entryPoint, assignedStaff: cur.assignedStaff,
+      priority: cur.priority, recommendedAction: cur.actionType, logoUrl: cur.logoUrl, createdAt: Date.now(),
+      sourceDocument: overrides?.sourceDoc ?? (scanDataUrl && scanFile ? {
+        fileName: scanFile.name,
+        invoiceNumber: extractedInvoiceNo,
+        scannedAt: Date.now(),
+        confidence: extractionConfidence,
+        mediaType: scanFile.type,
+        dataUrl: scanDataUrl,
+      } : null),
     };
     dispatch({ type: "ADD_BATCH", batch });
+    return true;
+  };
+
+  const createAllFromBill = async () => {
+    if (!extractedList || !scanFile || !scanDataUrl) return;
+    const sourceDoc = {
+      fileName: scanFile.name,
+      invoiceNumber: extractedInvoiceNo,
+      scannedAt: Date.now(),
+      confidence: extractionConfidence,
+      mediaType: scanFile.type,
+      dataUrl: scanDataUrl,
+    };
+    const existing = [...state.batches];
+    extractedList.forEach((ex, i) => {
+      const cat = ex.category && VALID_CATEGORIES.includes(ex.category) ? ex.category : "Produce";
+      const bsl = typeof ex.baseShelfLife === "number" ? ex.baseShelfLife : (CATEGORY_SHELF[cat] || 7);
+      const storeId = form.location === "dc" ? "DC" : form.location === "transit" ? "DC" : form.storeSelect;
+      const tempForCat = typeof ex.storageTemp === "number" ? ex.storageTemp : 5;
+      const id = ex.batchId || nextBatchId(existing);
+      const batch: Batch = {
+        id, product: ex.productName || `Product ${i + 1}`, sku: ex.sku || `SKU-${i + 1}`,
+        category: cat, storeId,
+        productionDate: new Date(parseScannedDate(ex.productionDate) || new Date().toISOString().slice(0, 10)).getTime(),
+        printedExpiry: new Date(parseScannedDate(ex.printedExpiry) || new Date(Date.now() + bsl * DAY).toISOString().slice(0, 10)).getTime(),
+        units: typeof ex.units === "number" ? ex.units : 100,
+        unitSize: ex.weight || "—",
+        supplier: ex.supplier || "—", origin: ex.origin || "—",
+        baseShelfLife: bsl, dwellDays: 0,
+        tempExcursion: false, tempPenaltyDays: 0,
+        maxTemp: tempForCat + 3, storageTemp: tempForCat,
+        tempHistory: tempHist(tempForCat), monitoringMethod: "IoT Sensor",
+        entryPoint: parseScannedDate(ex.deliveryDate) || new Date().toISOString().slice(0, 10),
+        assignedStaff: "", priority: "medium",
+        recommendedAction: "Monitor", logoUrl: null, createdAt: Date.now() + i,
+        sourceDocument: sourceDoc,
+      };
+      existing.unshift(batch);
+      setTimeout(() => dispatch({ type: "ADD_BATCH", batch }), i * 200);
+    });
+    setTimeout(() => {
+      dispatch({ type: "PUSH_TOAST", toast: { id: uid(), kind: "success", text: `${extractedList.length} passports created from bill ${extractedInvoiceNo || ""}` } });
+      dispatch({ type: "CLOSE_MODALS" });
+    }, extractedList.length * 200 + 100);
   };
 
   const incomplete = useMemo(() => {
@@ -925,103 +1220,287 @@ function PassportModal({ state, dispatch }: { state: State; dispatch: Dispatch<A
     return s;
   }, [form]);
 
+  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); };
+  const onDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(false); };
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setIsDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) acceptFile(f);
+  };
+
+  const confidenceBadge = () => {
+    if (extractionConfidence === "high") return <Pill bg="#DCFCE7" color={C.green}>High Confidence</Pill>;
+    if (extractionConfidence === "medium") return <Pill bg="#FEF3C7" color={C.amber}>Review Fields</Pill>;
+    return <Pill bg="#FEE2E2" color={C.red}>Manual Check Needed</Pill>;
+  };
+
   return (
-    <Modal
-      title="Create Product Passport"
-      onClose={() => dispatch({ type: "CLOSE_MODALS" })}
-      banner={Object.keys(errors).length ? <div className="mb-3 p-3 rounded-lg text-[13px]" style={{ background: "#FEE2E2", color: C.red }}>Please complete {Object.keys(errors).length} required field(s)</div> : null}
-      footer={
-        <>
-          <span className="text-[12px]" style={{ color: C.muted }}>* Required fields</span>
-          <div className="flex gap-2">
-            <Btn onClick={() => dispatch({ type: "CLOSE_MODALS" })}>Cancel</Btn>
-            <Btn kind="primary" onClick={create}>Create Passport</Btn>
-          </div>
-        </>
-      }
-    >
-      <TabPills tabs={[{ key: "batch", label: "Batch Details" }, { key: "cold", label: "Cold Chain" }, { key: "assign", label: "Assignment" }]} active={tab} onChange={setTab} incomplete={incomplete} />
-
-      {tab === "batch" && (
-        <div className="flex gap-6">
-          <div className="flex-shrink-0">
-            <div className="relative w-[110px] h-[110px] rounded-full flex items-center justify-center overflow-hidden" style={{ background: C.light, border: `1px solid ${C.border}` }}>
-              {form.logoUrl ? <img src={form.logoUrl} alt="" className="w-full h-full object-cover" /> : <span className="text-[40px]">📦</span>}
-              <button onClick={() => fileRef.current?.click()} className="absolute bottom-1 right-1 w-7 h-7 rounded-full bg-white shadow flex items-center justify-center text-[12px]">✏️</button>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
-            </div>
-          </div>
-          <div className="flex-1 grid grid-cols-2 gap-3">
-            <Field label="Product Name" required error={errors.product}><input className={inputCls} style={inputStyle(!!errors.product)} value={form.product} onChange={(e) => upd("product", e.target.value)} /></Field>
-            <Field label="SKU" required error={errors.sku}><input className={inputCls} style={inputStyle(!!errors.sku)} value={form.sku} onChange={(e) => upd("sku", e.target.value)} /></Field>
-            <Field label="Batch ID" required error={errors.batchId} hint={<button onClick={() => upd("batchId", nextBatchId(state.batches))} className="text-[12px]" style={{ color: C.accent }}>Auto-generate</button>}>
-              <input className={inputCls} style={inputStyle(!!errors.batchId)} value={form.batchId} onChange={(e) => upd("batchId", e.target.value)} />
-            </Field>
-            <Field label="Category"><select className={inputCls} style={inputStyle()} value={form.category} onChange={(e) => upd("category", e.target.value)}><option>Produce</option><option>Dairy</option><option>Bakery</option><option>Meat & Fish</option><option>Ready Meals</option></select></Field>
-            <Field label="Units"><input type="number" className={inputCls} style={inputStyle()} value={form.units} onChange={(e) => upd("units", +e.target.value)} /></Field>
-            <Field label="Unit Size"><input className={inputCls} style={inputStyle()} value={form.unitSize} onChange={(e) => upd("unitSize", e.target.value)} /></Field>
-            <Field label="Production Date"><input type="date" className={inputCls} style={inputStyle()} value={form.productionDate} onChange={(e) => upd("productionDate", e.target.value)} /></Field>
-            <Field label="Printed Expiry"><input type="date" className={inputCls} style={inputStyle()} value={form.printedExpiry} onChange={(e) => upd("printedExpiry", e.target.value)} /></Field>
-            <Field label="Supplier"><input className={inputCls} style={inputStyle()} value={form.supplier} onChange={(e) => upd("supplier", e.target.value)} /></Field>
-            <Field label="Origin"><input className={inputCls} style={inputStyle()} value={form.origin} onChange={(e) => upd("origin", e.target.value)} /></Field>
-            <Field label="Base Shelf Life (days)" required error={errors.baseShelfLife}><input type="number" className={inputCls} style={inputStyle(!!errors.baseShelfLife)} value={form.baseShelfLife} onChange={(e) => upd("baseShelfLife", +e.target.value)} /></Field>
-          </div>
-        </div>
-      )}
-
-      {tab === "cold" && (
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Storage Temp (°C)"><input type="number" className={inputCls} style={inputStyle()} value={form.storageTemp} onChange={(e) => upd("storageTemp", +e.target.value)} /></Field>
-          <Field label="Max Allowed Temp (°C)"><input type="number" className={inputCls} style={inputStyle()} value={form.maxTemp} onChange={(e) => upd("maxTemp", +e.target.value)} /></Field>
-          <div className="col-span-2">
-            <Field label="Monitoring Method">
-              <div className="flex gap-2">
-                {["IoT Sensor", "Manual", "Probe"].map((m) => (
-                  <button key={m} onClick={() => upd("monitoringMethod", m)} className="px-3 py-1.5 rounded-full text-[12px] font-medium" style={{ background: form.monitoringMethod === m ? C.accent : "transparent", color: form.monitoringMethod === m ? "#fff" : C.text2, border: `1px solid ${form.monitoringMethod === m ? C.accent : C.border}` }}>{m}</button>
-                ))}
-              </div>
-            </Field>
-          </div>
-          <Field label="Current Temp (°C)" hint={<Pill bg={tempInRange ? "#DCFCE7" : "#FEE2E2"} color={tempInRange ? C.green : C.red}>{tempInRange ? "Within Range" : "⚠ Excursion"}</Pill>}>
-            <input type="number" className={inputCls} style={inputStyle()} value={form.currentTemp} onChange={(e) => upd("currentTemp", +e.target.value)} />
-          </Field>
-        </div>
-      )}
-
-      {tab === "assign" && (
-        <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2">
-            <Field label="Location">
-              <div className="flex gap-2 mb-2">
-                {[["dc", "DC"], ["transit", "In Transit"], ["store", "Store"]].map(([v, l]) => (
-                  <button key={v} onClick={() => upd("location", v)} className="px-3 py-1.5 rounded-full text-[12px] font-medium" style={{ background: form.location === v ? C.accent : "transparent", color: form.location === v ? "#fff" : C.text2, border: `1px solid ${form.location === v ? C.accent : C.border}` }}>{l}</button>
-                ))}
-              </div>
-              {form.location === "store" && (
-                <select className={inputCls} style={inputStyle()} value={form.storeSelect} onChange={(e) => upd("storeSelect", e.target.value)}>
-                  {state.stores.filter((s) => s.id !== "DC").map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+    <div onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} className="contents">
+      <Modal
+        title="Create Product Passport"
+        onClose={() => dispatch({ type: "CLOSE_MODALS" })}
+        banner={
+          <>
+            {/* Bill scanner banner */}
+            <div className="mb-3 relative rounded-xl p-4" style={{ background: C.light, border: `1px dashed #93C5FD` }}>
+              {isDragOver && (
+                <div className="absolute inset-0 rounded-xl flex items-center justify-center text-[14px] font-semibold pointer-events-none" style={{ background: "rgba(239,246,255,0.95)", border: `2px solid ${C.accent}`, color: C.accent, zIndex: 5 }}>
+                  Drop your bill here
+                </div>
               )}
+
+              {scanState === "idle" && (
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div>
+                    <div className="text-[13px] font-semibold" style={{ color: C.text }}>📄 Have a delivery bill or invoice?</div>
+                    <div className="text-[12px] mt-0.5" style={{ color: C.text2 }}>Upload it and we'll fill the form for you</div>
+                    <div className="text-[11px] mt-1" style={{ color: C.muted }}>Supports PDF, JPG, PNG — max 10MB</div>
+                  </div>
+                  <button onClick={() => billFileRef.current?.click()} className="px-4 h-10 rounded-lg text-[13px] font-semibold text-white" style={{ background: C.primary }}>
+                    📤 Upload Bill / Invoice
+                  </button>
+                  <input ref={billFileRef} type="file" accept="application/pdf,image/jpeg,image/png" className="hidden" onChange={onBillSelect} />
+                </div>
+              )}
+
+              {scanState === "preview" && scanFile && scanDataUrl && (
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-[13px] font-semibold" style={{ color: C.text }}>📄 Bill preview</div>
+                    <button onClick={clearScan} className="w-7 h-7 rounded-full bg-white shadow text-[14px]" style={{ color: C.text2 }}>×</button>
+                  </div>
+                  {scanFile.type === "application/pdf" ? (
+                    <embed src={scanDataUrl} type="application/pdf" className="w-full rounded-lg" style={{ height: 200, border: `1px solid ${C.border}`, background: "#fff" }} />
+                  ) : (
+                    <img src={scanDataUrl} alt="bill preview" className="w-full rounded-lg" style={{ maxHeight: 220, objectFit: "contain", border: `1px solid ${C.border}`, background: "#fff" }} />
+                  )}
+                  <div className="flex items-center justify-between mt-2 text-[12px]" style={{ color: C.text2 }}>
+                    <span>{scanFile.name} · {(scanFile.size / 1024).toFixed(0)} KB</span>
+                    <Pill bg="#DCFCE7" color={C.green}>Ready to scan</Pill>
+                  </div>
+                  <button onClick={runExtraction} className="w-full mt-3 h-11 rounded-lg text-[15px] font-semibold text-white" style={{ background: C.primary }}>
+                    🔍 Extract Passport Data
+                  </button>
+                </div>
+              )}
+
+              {scanState === "loading" && (
+                <div className="flex items-center gap-3 py-2">
+                  <div className="w-5 h-5 rounded-full animate-spin" style={{ border: `2px solid ${C.accent}`, borderTopColor: "transparent" }} />
+                  <div className="text-[13px] font-medium" style={{ color: C.text }} key={processIdx}>
+                    {PROCESS_MSGS[processIdx]}
+                  </div>
+                  <div className="flex-1 h-2 rounded-full overflow-hidden ml-2" style={{ background: "#DBEAFE" }}>
+                    <div className="h-full" style={{ background: C.accent, width: "50%", animation: "fp-pulse 1.2s ease-in-out infinite" }} />
+                  </div>
+                </div>
+              )}
+
+              {scanState === "error" && (
+                <div className="rounded-lg p-3" style={{ background: "#FEE2E2", border: `1px solid #FCA5A5` }}>
+                  <div className="text-[13px] font-semibold mb-2" style={{ color: C.red }}>{scanError || "Could not read the document."}</div>
+                  <div className="flex gap-2">
+                    {scanFile && <button onClick={runExtraction} className="px-3 h-8 rounded-lg text-[12px] font-semibold text-white" style={{ background: C.primary }}>Retry</button>}
+                    <button onClick={clearScan} className="px-3 h-8 rounded-lg text-[12px] font-semibold" style={{ border: `1px solid ${C.border}`, color: C.text2, background: "#fff" }}>Enter Manually</button>
+                  </div>
+                </div>
+              )}
+
+              {scanState === "nodata" && (
+                <div className="rounded-lg p-3" style={{ background: "#FEF3C7", border: `1px solid #FCD34D` }}>
+                  <div className="text-[13px] font-medium mb-2" style={{ color: C.amber }}>We couldn't extract product data from this document. This may not be a delivery note or invoice. Please enter details manually.</div>
+                  <button onClick={clearScan} className="px-3 h-8 rounded-lg text-[12px] font-semibold" style={{ border: `1px solid ${C.border}`, color: C.text2, background: "#fff" }}>Enter Manually</button>
+                </div>
+              )}
+
+              {scanState === "results" && extracted && (
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-[13px] font-semibold" style={{ color: C.green }}>✓ Data extracted from bill</div>
+                    {confidenceBadge()}
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mb-3 p-3 rounded-lg" style={{ background: "#fff", border: `1px solid ${C.border}` }}>
+                    {([
+                      ["Product Name", extracted.productName],
+                      ["SKU", extracted.sku],
+                      ["Batch ID", extracted.batchId],
+                      ["Category", extracted.category],
+                      ["Units", extracted.units],
+                      ["Unit Size", extracted.weight],
+                      ["Supplier", extracted.supplier],
+                      ["Origin", extracted.origin],
+                      ["Production Date", extracted.productionDate],
+                      ["Expiry Date", extracted.printedExpiry],
+                      ["Base Shelf Life", extracted.baseShelfLife ? `${extracted.baseShelfLife} days` : null],
+                      ["Storage Temp", typeof extracted.storageTemp === "number" ? `${extracted.storageTemp}°C` : null],
+                      ["Invoice No.", extracted.invoiceNumber],
+                      ["Delivery Date", extracted.deliveryDate],
+                    ] as [string, any][]).map(([k, v]) => (
+                      <div key={k} className="flex items-center justify-between text-[12px] py-0.5">
+                        <span style={{ color: C.muted }}>{k}</span>
+                        {v !== null && v !== undefined && v !== "" ? (
+                          <span style={{ color: C.text, fontWeight: 500 }}>
+                            {String(v)} {extractionConfidence === "low" && <span style={{ color: C.amber }}>⚠</span>}
+                          </span>
+                        ) : (
+                          <span className="italic" style={{ color: C.muted }}>Not found</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => fillFormWith(extracted)} className="flex-1 h-10 rounded-lg text-[13px] font-semibold text-white" style={{ background: C.primary }}>✓ Fill Form with This Data</button>
+                    <button onClick={clearScan} className="flex-1 h-10 rounded-lg text-[13px] font-semibold" style={{ border: `1px solid ${C.border}`, color: C.text2, background: "#fff" }}>✕ Discard & Enter Manually</button>
+                  </div>
+                </div>
+              )}
+
+              {scanState === "multi" && extractedList && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <div className="text-[13px] font-semibold" style={{ color: C.text }}>Multiple products found on this bill</div>
+                      <div className="text-[12px]" style={{ color: C.text2 }}>Select which product to create a passport for:</div>
+                    </div>
+                    {confidenceBadge()}
+                  </div>
+                  <div className="space-y-2 max-h-[260px] overflow-auto pr-1">
+                    {extractedList.map((p, i) => (
+                      <div key={i} className="flex items-center justify-between p-3 rounded-lg" style={{ background: "#fff", border: `1px solid ${C.border}` }}>
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-semibold truncate" style={{ color: C.text }}>{p.productName || `Product ${i + 1}`}</div>
+                          <div className="text-[11px]" style={{ color: C.muted }}>{p.sku || "—"} · {p.batchId || "—"}</div>
+                          <div className="text-[11px]" style={{ color: C.text2 }}>{p.units ?? "?"} units · Expiry {p.printedExpiry || "—"}</div>
+                        </div>
+                        <button onClick={() => fillFormWith(p)} className="px-3 h-8 rounded-lg text-[12px] font-semibold text-white flex-shrink-0" style={{ background: C.primary }}>Select</button>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={createAllFromBill} className="w-full mt-3 h-10 rounded-lg text-[13px] font-semibold" style={{ background: C.accent, color: "#fff" }}>
+                    Create passports for all {extractedList.length} products →
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {successMsg && (
+              <div className="mb-3 p-3 rounded-lg text-[13px]" style={{ background: "#F0FDF4", borderLeft: `3px solid ${C.green}`, color: C.text }}>
+                {successMsg}
+              </div>
+            )}
+            {Object.keys(errors).length > 0 && (
+              <div className="mb-3 p-3 rounded-lg text-[13px]" style={{ background: "#FEE2E2", color: C.red }}>
+                Please complete {Object.keys(errors).length} required field(s)
+              </div>
+            )}
+          </>
+        }
+        footer={
+          <>
+            <span className="text-[12px]" style={{ color: C.muted }}>* Required fields</span>
+            <div className="flex gap-2">
+              <Btn onClick={() => dispatch({ type: "CLOSE_MODALS" })}>Cancel</Btn>
+              <Btn kind="primary" onClick={() => create()}>Create Passport</Btn>
+            </div>
+          </>
+        }
+      >
+        <TabPills tabs={[{ key: "batch", label: "Batch Details" }, { key: "cold", label: "Cold Chain" }, { key: "assign", label: "Assignment" }]} active={tab} onChange={setTab} incomplete={incomplete} />
+
+        {tab === "batch" && (
+          <div className="flex gap-6">
+            <div className="flex-shrink-0">
+              <div className="relative w-[110px] h-[110px] rounded-full flex items-center justify-center overflow-hidden" style={{ background: C.light, border: `1px solid ${C.border}` }}>
+                {form.logoUrl ? <img src={form.logoUrl} alt="" className="w-full h-full object-cover" /> : <span className="text-[40px]">📦</span>}
+                <button onClick={() => fileRef.current?.click()} className="absolute bottom-1 right-1 w-7 h-7 rounded-full bg-white shadow flex items-center justify-center text-[12px]">✏️</button>
+                <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
+              </div>
+            </div>
+            <div className="flex-1 grid grid-cols-2 gap-3">
+              <Field label="Product Name" required error={errors.product}>
+                <input className={fieldClass("product")} style={fieldStyle("product", !!errors.product)} value={form.product} onChange={(e) => upd("product", e.target.value)} />
+                {lowConfFields.has("product") && <div className="text-[11px] mt-1" style={{ color: C.amber }}>Auto-filled — please verify</div>}
+              </Field>
+              <Field label="SKU" required error={errors.sku}>
+                <input className={fieldClass("sku")} style={fieldStyle("sku", !!errors.sku)} value={form.sku} onChange={(e) => upd("sku", e.target.value)} />
+                {lowConfFields.has("sku") && <div className="text-[11px] mt-1" style={{ color: C.amber }}>Auto-filled — please verify</div>}
+              </Field>
+              <Field label="Batch ID" required error={errors.batchId} hint={<button onClick={() => upd("batchId", nextBatchId(state.batches))} className="text-[12px]" style={{ color: C.accent }}>Auto-generate</button>}>
+                <input className={fieldClass("batchId")} style={fieldStyle("batchId", !!errors.batchId)} value={form.batchId} onChange={(e) => upd("batchId", e.target.value)} />
+                {extractedInvoiceNo && <div className="text-[11px] mt-1" style={{ color: C.muted }}>Invoice Ref: {extractedInvoiceNo}</div>}
+              </Field>
+              <Field label="Category">
+                <select className={fieldClass("category")} style={fieldStyle("category")} value={form.category} onChange={(e) => upd("category", e.target.value)}>
+                  {VALID_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+                </select>
+              </Field>
+              <Field label="Units"><input type="number" className={fieldClass("units")} style={fieldStyle("units")} value={form.units} onChange={(e) => upd("units", +e.target.value)} /></Field>
+              <Field label="Unit Size"><input className={fieldClass("unitSize")} style={fieldStyle("unitSize")} value={form.unitSize} onChange={(e) => upd("unitSize", e.target.value)} /></Field>
+              <Field label="Production Date"><input type="date" className={fieldClass("productionDate")} style={fieldStyle("productionDate")} value={form.productionDate} onChange={(e) => upd("productionDate", e.target.value)} /></Field>
+              <Field label="Printed Expiry"><input type="date" className={fieldClass("printedExpiry")} style={fieldStyle("printedExpiry")} value={form.printedExpiry} onChange={(e) => upd("printedExpiry", e.target.value)} /></Field>
+              <Field label="Supplier"><input className={fieldClass("supplier")} style={fieldStyle("supplier")} value={form.supplier} onChange={(e) => upd("supplier", e.target.value)} /></Field>
+              <Field label="Origin"><input className={fieldClass("origin")} style={fieldStyle("origin")} value={form.origin} onChange={(e) => upd("origin", e.target.value)} /></Field>
+              <Field label="Base Shelf Life (days)" required error={errors.baseShelfLife}>
+                <input type="number" className={fieldClass("baseShelfLife")} style={fieldStyle("baseShelfLife", !!errors.baseShelfLife)} value={form.baseShelfLife} onChange={(e) => upd("baseShelfLife", +e.target.value)} />
+              </Field>
+            </div>
+          </div>
+        )}
+
+        {tab === "cold" && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Storage Temp (°C)"><input type="number" className={fieldClass("storageTemp")} style={fieldStyle("storageTemp")} value={form.storageTemp} onChange={(e) => upd("storageTemp", +e.target.value)} /></Field>
+            <Field label="Max Allowed Temp (°C)"><input type="number" className={inputCls} style={inputStyle()} value={form.maxTemp} onChange={(e) => upd("maxTemp", +e.target.value)} /></Field>
+            <div className="col-span-2">
+              <Field label="Monitoring Method">
+                <div className="flex gap-2">
+                  {["IoT Sensor", "Manual", "Probe"].map((m) => (
+                    <button key={m} onClick={() => upd("monitoringMethod", m)} className="px-3 py-1.5 rounded-full text-[12px] font-medium" style={{ background: form.monitoringMethod === m ? C.accent : "transparent", color: form.monitoringMethod === m ? "#fff" : C.text2, border: `1px solid ${form.monitoringMethod === m ? C.accent : C.border}` }}>{m}</button>
+                  ))}
+                </div>
+              </Field>
+            </div>
+            <Field label="Current Temp (°C)" hint={<Pill bg={tempInRange ? "#DCFCE7" : "#FEE2E2"} color={tempInRange ? C.green : C.red}>{tempInRange ? "Within Range" : "⚠ Excursion"}</Pill>}>
+              <input type="number" className={inputCls} style={inputStyle()} value={form.currentTemp} onChange={(e) => upd("currentTemp", +e.target.value)} />
             </Field>
           </div>
-          <Field label="Assigned Staff"><input className={inputCls} style={inputStyle()} value={form.assignedStaff} onChange={(e) => upd("assignedStaff", e.target.value)} placeholder="Initials e.g. AV" /></Field>
-          <Field label="Entry Date"><input type="date" className={inputCls} style={inputStyle()} value={form.entryPoint} onChange={(e) => upd("entryPoint", e.target.value)} /></Field>
-          <Field label="Recommended Action"><select className={inputCls} style={inputStyle()} value={form.actionType} onChange={(e) => upd("actionType", e.target.value)}><option>Monitor</option><option>FEFO Rotation</option><option>Markdown</option><option>Allocation Adjust</option></select></Field>
-          <Field label="Priority">
-            <div className="flex gap-2">
-              {(["low", "medium", "high", "urgent"] as const).map((p) => {
-                const colors: Record<string, string> = { low: C.green, medium: C.amber, high: "#EA580C", urgent: C.red };
-                const on = form.priority === p;
-                return <button key={p} onClick={() => upd("priority", p)} className="px-3 py-1 rounded-full text-[11px] font-semibold uppercase" style={{ background: on ? colors[p] : "transparent", color: on ? "#fff" : colors[p], border: `1px solid ${colors[p]}` }}>{p}</button>;
-              })}
+        )}
+
+        {tab === "assign" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <Field label="Location">
+                <div className="flex gap-2 mb-2">
+                  {[["dc", "DC"], ["transit", "In Transit"], ["store", "Store"]].map(([v, l]) => (
+                    <button key={v} onClick={() => upd("location", v)} className="px-3 py-1.5 rounded-full text-[12px] font-medium" style={{ background: form.location === v ? C.accent : "transparent", color: form.location === v ? "#fff" : C.text2, border: `1px solid ${form.location === v ? C.accent : C.border}` }}>{l}</button>
+                  ))}
+                </div>
+                {form.location === "store" && (
+                  <select className={inputCls} style={inputStyle()} value={form.storeSelect} onChange={(e) => upd("storeSelect", e.target.value)}>
+                    {state.stores.filter((s) => s.id !== "DC").map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                )}
+              </Field>
             </div>
-          </Field>
-          <div className="col-span-2">
-            <Field label="Notes"><textarea className="w-full px-3 py-2 rounded-lg text-[13px] outline-none" style={inputStyle()} rows={3} value={form.notes} onChange={(e) => upd("notes", e.target.value)} /></Field>
+            <Field label="Assigned Staff"><input className={inputCls} style={inputStyle()} value={form.assignedStaff} onChange={(e) => upd("assignedStaff", e.target.value)} placeholder="Initials e.g. AV" /></Field>
+            <Field label="Entry Date"><input type="date" className={fieldClass("entryPoint")} style={fieldStyle("entryPoint")} value={form.entryPoint} onChange={(e) => upd("entryPoint", e.target.value)} /></Field>
+            <Field label="Recommended Action"><select className={inputCls} style={inputStyle()} value={form.actionType} onChange={(e) => upd("actionType", e.target.value)}><option>Monitor</option><option>FEFO Rotation</option><option>Markdown</option><option>Allocation Adjust</option></select></Field>
+            <Field label="Priority">
+              <div className="flex gap-2">
+                {(["low", "medium", "high", "urgent"] as const).map((p) => {
+                  const colors: Record<string, string> = { low: C.green, medium: C.amber, high: "#EA580C", urgent: C.red };
+                  const on = form.priority === p;
+                  return <button key={p} onClick={() => upd("priority", p)} className="px-3 py-1 rounded-full text-[11px] font-semibold uppercase" style={{ background: on ? colors[p] : "transparent", color: on ? "#fff" : colors[p], border: `1px solid ${colors[p]}` }}>{p}</button>;
+                })}
+              </div>
+            </Field>
+            <div className="col-span-2">
+              <Field label="Notes"><textarea className="w-full px-3 py-2 rounded-lg text-[13px] outline-none" style={inputStyle()} rows={3} value={form.notes} onChange={(e) => upd("notes", e.target.value)} /></Field>
+            </div>
           </div>
-        </div>
-      )}
-    </Modal>
+        )}
+      </Modal>
+    </div>
   );
 }
 
@@ -1120,9 +1599,59 @@ function Drawer({ state, dispatch }: { state: State; dispatch: Dispatch<Action> 
               )}
             </div>
           )}
+
+          <h4 className="text-[13px] font-semibold mt-5 mb-2" style={{ color: C.text }}>Source Document</h4>
+          {batch.sourceDocument ? (
+            <SourceDocSection doc={batch.sourceDocument} />
+          ) : (
+            <div className="text-[13px] italic" style={{ color: C.muted }}>Manually entered</div>
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+function SourceDocSection({ doc }: { doc: NonNullable<Batch["sourceDocument"]> }) {
+  const [viewOpen, setViewOpen] = useState(false);
+  const confColor = doc.confidence === "high" ? C.green : doc.confidence === "medium" ? C.amber : C.red;
+  const confBg = doc.confidence === "high" ? "#DCFCE7" : doc.confidence === "medium" ? "#FEF3C7" : "#FEE2E2";
+  return (
+    <>
+      <div className="p-3 rounded-lg flex items-center justify-between gap-2" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold truncate" style={{ color: C.text }}>📄 {doc.invoiceNumber || doc.fileName}</div>
+          <div className="text-[11px]" style={{ color: C.muted }}>Scanned on {formatDate(doc.scannedAt)}</div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Pill bg={confBg} color={confColor}>{doc.confidence}</Pill>
+          <button onClick={() => setViewOpen(true)} className="px-2 h-7 rounded-lg text-[11px] font-semibold" style={{ background: C.accent, color: "#fff" }}>View Original Bill</button>
+        </div>
+      </div>
+      {viewOpen && (
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4 no-print" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setViewOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[800px] max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: C.border }}>
+              <div>
+                <div className="text-[13px] font-bold uppercase tracking-wider" style={{ color: C.primary }}>Source Bill</div>
+                <div className="text-[12px]" style={{ color: C.text2 }}>{doc.fileName}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <a href={doc.dataUrl} download={doc.fileName} className="px-3 h-8 rounded-lg text-[12px] font-semibold inline-flex items-center" style={{ background: C.primary, color: "#fff" }}>Download</a>
+                <button onClick={() => setViewOpen(false)} className="w-8 h-8 rounded-full hover:bg-slate-100 text-[18px]" style={{ color: C.text2 }}>×</button>
+              </div>
+            </div>
+            <div className="p-4">
+              {doc.mediaType === "application/pdf" ? (
+                <embed src={doc.dataUrl} type="application/pdf" className="w-full rounded-lg" style={{ height: "70vh", border: `1px solid ${C.border}` }} />
+              ) : (
+                <img src={doc.dataUrl} alt="Original bill" className="w-full rounded-lg" style={{ maxHeight: "70vh", objectFit: "contain", border: `1px solid ${C.border}` }} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1137,6 +1666,7 @@ const ACT_ICON: Record<ActivityType, { icon: string; color: string }> = {
   waste_logged: { icon: "🗑", color: C.red },
   store_created: { icon: "🏪", color: C.accent },
   rsl_alert: { icon: "🕐", color: C.amber },
+  bill_scanned: { icon: "📄", color: C.accent },
 };
 
 /* ============================================================
@@ -2057,6 +2587,11 @@ export default function FreshnessPassport() {
           100% { border-left: 3px solid transparent; background: transparent; }
         }
         .fp-flash-row { animation: fp-flash 3s ease forwards; }
+        @keyframes fp-field-fill {
+          0%   { background: #EFF6FF; }
+          100% { background: #ffffff; }
+        }
+        .fp-field-fill { animation: fp-field-fill 0.8s ease forwards; }
         @media print {
           body { background: white; }
           .no-print { display: none !important; }
