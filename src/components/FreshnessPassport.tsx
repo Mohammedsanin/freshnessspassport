@@ -662,7 +662,7 @@ const FreshnessGauge = ({ score, size = 180 }: { score: number; size?: number })
    ============================================================ */
 const Modal = ({ title, onClose, children, footer, banner }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; banner?: ReactNode }) => (
   <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 no-print" style={{ background: "rgba(0,0,0,0.35)" }} onClick={onClose}>
-    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[680px] max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+    <div data-modal-scroll="true" className="bg-white rounded-2xl shadow-2xl w-full max-w-[680px] max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center justify-between p-6 pb-4">
         <h2 className="text-[13px] font-bold uppercase tracking-wider" style={{ color: C.primary }}>{title}</h2>
         <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-slate-100 text-[18px]" style={{ color: C.text2 }}>×</button>
