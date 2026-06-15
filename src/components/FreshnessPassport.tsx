@@ -1146,6 +1146,7 @@ const ACT_ICON: Record<ActivityType, { icon: string; color: string }> = {
   waste_logged: { icon: "🗑", color: C.red },
   store_created: { icon: "🏪", color: C.accent },
   rsl_alert: { icon: "🕐", color: C.amber },
+  bill_scanned: { icon: "📄", color: C.accent },
 };
 
 /* ============================================================
