@@ -161,7 +161,8 @@ type ActivityType =
   | "temp_excursion"
   | "waste_logged"
   | "store_created"
-  | "rsl_alert";
+  | "rsl_alert"
+  | "bill_scanned";
 
 type Activity = {
   id: string;
