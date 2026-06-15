@@ -129,6 +129,14 @@ type Batch = {
   recommendedAction?: string;
   logoUrl?: string | null;
   createdAt?: number;
+  sourceDocument?: {
+    fileName: string;
+    invoiceNumber: string | null;
+    scannedAt: number;
+    confidence: "high" | "medium" | "low";
+    mediaType: string;
+    dataUrl: string;
+  } | null;
 };
 
 type Task = {
