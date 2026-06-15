@@ -1612,6 +1612,49 @@ function Drawer({ state, dispatch }: { state: State; dispatch: Dispatch<Action> 
   );
 }
 
+function SourceDocSection({ doc }: { doc: NonNullable<Batch["sourceDocument"]> }) {
+  const [viewOpen, setViewOpen] = useState(false);
+  const confColor = doc.confidence === "high" ? C.green : doc.confidence === "medium" ? C.amber : C.red;
+  const confBg = doc.confidence === "high" ? "#DCFCE7" : doc.confidence === "medium" ? "#FEF3C7" : "#FEE2E2";
+  return (
+    <>
+      <div className="p-3 rounded-lg flex items-center justify-between gap-2" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold truncate" style={{ color: C.text }}>📄 {doc.invoiceNumber || doc.fileName}</div>
+          <div className="text-[11px]" style={{ color: C.muted }}>Scanned on {formatDate(doc.scannedAt)}</div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Pill bg={confBg} color={confColor}>{doc.confidence}</Pill>
+          <button onClick={() => setViewOpen(true)} className="px-2 h-7 rounded-lg text-[11px] font-semibold" style={{ background: C.accent, color: "#fff" }}>View Original Bill</button>
+        </div>
+      </div>
+      {viewOpen && (
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4 no-print" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setViewOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[800px] max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: C.border }}>
+              <div>
+                <div className="text-[13px] font-bold uppercase tracking-wider" style={{ color: C.primary }}>Source Bill</div>
+                <div className="text-[12px]" style={{ color: C.text2 }}>{doc.fileName}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <a href={doc.dataUrl} download={doc.fileName} className="px-3 h-8 rounded-lg text-[12px] font-semibold inline-flex items-center" style={{ background: C.primary, color: "#fff" }}>Download</a>
+                <button onClick={() => setViewOpen(false)} className="w-8 h-8 rounded-full hover:bg-slate-100 text-[18px]" style={{ color: C.text2 }}>×</button>
+              </div>
+            </div>
+            <div className="p-4">
+              {doc.mediaType === "application/pdf" ? (
+                <embed src={doc.dataUrl} type="application/pdf" className="w-full rounded-lg" style={{ height: "70vh", border: `1px solid ${C.border}` }} />
+              ) : (
+                <img src={doc.dataUrl} alt="Original bill" className="w-full rounded-lg" style={{ maxHeight: "70vh", objectFit: "contain", border: `1px solid ${C.border}` }} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 /* ============================================================
    ACTIVITY ICON
    ============================================================ */
