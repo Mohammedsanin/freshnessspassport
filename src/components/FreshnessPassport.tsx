@@ -2537,6 +2537,11 @@ export default function FreshnessPassport() {
           100% { border-left: 3px solid transparent; background: transparent; }
         }
         .fp-flash-row { animation: fp-flash 3s ease forwards; }
+        @keyframes fp-field-fill {
+          0%   { background: #EFF6FF; }
+          100% { background: #ffffff; }
+        }
+        .fp-field-fill { animation: fp-field-fill 0.8s ease forwards; }
         @media print {
           body { background: white; }
           .no-print { display: none !important; }
