@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useState, useEffect } from "react";
 import FreshnessPassport from "@/components/FreshnessPassport";
+import LoginGate, { useFpSession } from "@/components/LoginGate";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -22,5 +24,10 @@ export const Route = createFileRoute("/")({
 });
 
 function Page() {
+  const { session, setSession } = useFpSession();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+  if (!session) return <LoginGate onAuthenticated={setSession} />;
   return <FreshnessPassport />;
 }
