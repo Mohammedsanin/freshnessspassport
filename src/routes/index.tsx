@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import FreshnessPassport from "@/components/FreshnessPassport";
+import AuthGate from "@/components/AuthGate";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -22,5 +23,9 @@ export const Route = createFileRoute("/")({
 });
 
 function Page() {
-  return <FreshnessPassport />;
+  return (
+    <AuthGate>
+      <FreshnessPassport />
+    </AuthGate>
+  );
 }
