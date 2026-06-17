@@ -56,33 +56,13 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (session) {
     return (
-      <div className="relative">
-        <div className="fixed top-3 right-3 z-[60] flex items-center gap-2 rounded-full bg-white/95 backdrop-blur border border-slate-200 shadow-sm px-3 py-1.5 text-xs">
-          <div className="h-6 w-6 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white grid place-items-center font-semibold">
-            {session.fullName.charAt(0).toUpperCase()}
-          </div>
-          <div className="leading-tight">
-            <div className="font-semibold text-slate-800">{session.fullName}</div>
-            <div className="text-[10px] text-slate-500 uppercase tracking-wide">
-              {session.role === "admin" ? "Administrator" : session.storeName || "User"}
-            </div>
-          </div>
-          <button
-            onClick={logout}
-            className="ml-1 text-slate-400 hover:text-rose-600 transition-colors"
-            title="Sign out"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-          </button>
-        </div>
+      <SessionProvider value={{ session, signOut: logout }}>
         {children}
-      </div>
+      </SessionProvider>
     );
   }
 
-  return (
-    <AuthShell mode={mode} setMode={setMode} onLogin={login} />
-  );
+  return <AuthShell mode={mode} setMode={setMode} onLogin={login} />;
 }
 
 function AuthShell({
