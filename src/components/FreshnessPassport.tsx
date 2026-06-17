@@ -2557,7 +2557,7 @@ export default function FreshnessPassport() {
       ...init,
       stores: [...init.stores, store],
       activeStoreFilter: id,
-      activity: [{ id: `a${Date.now()}`, ts: Date.now(), type: "store_created", text: `Welcome — store "${store.name}" linked to your account`, storeId: id }, ...init.activity],
+      activity: [{ id: `a${Date.now()}`, ts: Date.now(), type: "store_created" as const, text: `Welcome — store "${store.name}" linked to your account`, storeId: id }, ...init.activity],
     };
   });
 
