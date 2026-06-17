@@ -346,13 +346,30 @@ function SignupForm({ onLogin, switchToLogin }: { onLogin: (s: Session) => void;
           <div className="flex flex-col md:flex-row gap-8 items-start">
             <div className="mx-auto md:mx-0 flex-shrink-0">
               <div className="relative">
-                <div className="h-32 w-32 rounded-full bg-gradient-to-br from-slate-300 to-slate-400 grid place-items-center text-white text-4xl font-bold shadow-md">
-                  {(form.fullName || "?").charAt(0).toUpperCase()}
+                <div className="h-32 w-32 rounded-full bg-gradient-to-br from-slate-300 to-slate-400 grid place-items-center text-white text-4xl font-bold shadow-md overflow-hidden">
+                  {form.avatarDataUrl ? (
+                    <img src={form.avatarDataUrl} alt="avatar" className="h-full w-full object-cover" />
+                  ) : (
+                    (form.fullName || "?").charAt(0).toUpperCase()
+                  )}
                 </div>
-                <button type="button" className="absolute bottom-1 right-1 h-8 w-8 rounded-full bg-white border border-slate-200 grid place-items-center shadow-md hover:bg-slate-50">
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => pickAvatar(e.target.files?.[0])}
+                />
+                <button
+                  type="button"
+                  onClick={() => avatarInputRef.current?.click()}
+                  className="absolute bottom-1 right-1 h-8 w-8 rounded-full bg-white border border-slate-200 grid place-items-center shadow-md hover:bg-slate-50"
+                  title="Upload photo"
+                >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-600"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
                 </button>
               </div>
+              <div className="text-[10.5px] text-slate-500 text-center mt-2 max-w-[8rem]">Click pencil to upload</div>
             </div>
 
             <div className="flex-1 w-full space-y-4">
