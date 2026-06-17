@@ -1,11 +1,5 @@
-import { useEffect, useState } from "react";
-
-type Session = {
-  email: string;
-  fullName: string;
-  role: "user" | "admin";
-  storeName?: string;
-};
+import { useEffect, useRef, useState } from "react";
+import { SessionProvider, type Session } from "@/lib/session-context";
 
 const KEY = "fp_session_v1";
 const ACCOUNTS_KEY = "fp_accounts_v1";
@@ -21,6 +15,7 @@ type Account = {
   unitSystem: string;
   language: string;
   notifications: boolean;
+  avatarDataUrl?: string;
 };
 
 function loadAccounts(): Account[] {
