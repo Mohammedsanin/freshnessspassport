@@ -272,7 +272,16 @@ function SignupForm({ onLogin, switchToLogin }: { onLogin: (s: Session) => void;
     unitSystem: "Metric (kg, °C)",
     language: "English",
     notifications: true,
+    avatarDataUrl: "" as string,
   });
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  function pickAvatar(file?: File | null) {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return setErr("Avatar must be under 2MB.");
+    const reader = new FileReader();
+    reader.onload = () => setForm((f) => ({ ...f, avatarDataUrl: String(reader.result) }));
+    reader.readAsDataURL(file);
+  }
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   const tabs: { id: typeof tab; label: string; icon: string }[] = [
