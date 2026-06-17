@@ -161,6 +161,7 @@ function LoginForm({ onLogin, switchToSignup }: { onLogin: (s: Session) => void;
   const [email, setEmail] = useState("");
   const [pwd, setPwd] = useState("");
   const [err, setErr] = useState("");
+  const [forgot, setForgot] = useState(false);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -168,13 +169,13 @@ function LoginForm({ onLogin, switchToSignup }: { onLogin: (s: Session) => void;
     if (!email || !pwd) return setErr("Please enter your email and password.");
     const accounts = loadAccounts();
     const found = accounts.find((a) => a.email.toLowerCase() === email.toLowerCase());
-    // Demo: accept any account with matching password, or any creds when no account exists yet
     if (found && found.password !== pwd) return setErr("Incorrect password.");
     onLogin({
       email,
       fullName: found?.fullName || email.split("@")[0],
       role: "user",
       storeName: found?.storeName,
+      avatarDataUrl: found?.avatarDataUrl,
     });
   }
 
@@ -192,8 +193,67 @@ function LoginForm({ onLogin, switchToSignup }: { onLogin: (s: Session) => void;
         </Field>
         <Field label="Password">
           <input type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} placeholder="••••••••••••" className={inputCls} />
-          <div className="text-[11px] text-blue-600 hover:underline mt-1.5 cursor-pointer inline-block">Forgot password?</div>
+          <button type="button" onClick={() => setForgot(true)} className="text-[11px] text-blue-600 hover:underline mt-1.5">Forgot password?</button>
         </Field>
+
+        <div className="text-[11px] text-slate-500 bg-blue-50/60 border border-blue-100 rounded-lg px-3 py-2 leading-relaxed">
+          <span className="font-semibold text-blue-700">Demo mode:</span> any email & password works. Create an account to personalize your dashboard with your store.
+        </div>
+
+        {err && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-2 rounded-lg">{err}</div>}
+
+        <button type="submit" className="w-full py-2.5 mt-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-sm font-semibold rounded-lg shadow-md hover:shadow-lg hover:from-blue-700 hover:to-indigo-700 transition-all">
+          Sign In →
+        </button>
+
+        <div className="text-center text-xs text-slate-500 pt-2">
+          New here?{" "}
+          <button type="button" onClick={switchToSignup} className="text-blue-600 font-semibold hover:underline">
+            Create your account
+          </button>
+        </div>
+      </form>
+
+      {forgot && <ForgotPasswordModal onClose={() => setForgot(false)} defaultEmail={email} />}
+    </div>
+  );
+}
+
+function ForgotPasswordModal({ onClose, defaultEmail }: { onClose: () => void; defaultEmail: string }) {
+  const [email, setEmail] = useState(defaultEmail);
+  const [sent, setSent] = useState(false);
+  return (
+    <div className="fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm grid place-items-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-bold text-slate-900">Reset your password</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+        {!sent ? (
+          <>
+            <p className="text-xs text-slate-500 mb-4">Enter your email and we'll send a reset link (simulated in this demo).</p>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@retailer.com" className={inputCls} autoFocus />
+            <button
+              onClick={() => email && setSent(true)}
+              className="w-full mt-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-sm font-semibold rounded-lg shadow hover:shadow-md transition-all"
+            >
+              Send reset link
+            </button>
+          </>
+        ) : (
+          <div className="text-center py-4">
+            <div className="mx-auto h-12 w-12 rounded-full bg-emerald-100 grid place-items-center mb-3">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-emerald-600"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div className="text-sm font-semibold text-slate-800">Check your inbox</div>
+            <div className="text-xs text-slate-500 mt-1">A reset link has been sent to <span className="font-medium text-slate-700">{email}</span>.</div>
+            <button onClick={onClose} className="mt-4 text-xs font-semibold text-blue-600 hover:underline">Back to sign in</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
         {err && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-2 rounded-lg">{err}</div>}
 
