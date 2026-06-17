@@ -2531,7 +2531,35 @@ function ActivityLogModal({ state, dispatch }: PageProps) {
    ROOT
    ============================================================ */
 export default function FreshnessPassport() {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const { session } = useSession();
+  const [state, dispatch] = useReducer(reducer, initialState, (init) => {
+    if (!session || session.role === "admin" || !session.storeName) return init;
+    const exists = init.stores.some((s) => s.name.toLowerCase() === session.storeName!.toLowerCase());
+    if (exists) return init;
+    const id = `s${Date.now().toString(36)}`;
+    const store: Store = {
+      id,
+      code: session.storeName.slice(0, 3).toUpperCase().padEnd(3, "X") + "-01",
+      name: session.storeName,
+      city: "—",
+      region: "—",
+      address: "—",
+      country: "—",
+      postcode: "—",
+      manager: session.fullName,
+      email: session.email,
+      phone: "—",
+      activeSince: Date.now(),
+      tier: "Pilot",
+      type: "Supermarket",
+    };
+    return {
+      ...init,
+      stores: [...init.stores, store],
+      activeStoreFilter: id,
+      activity: [{ id: `a${Date.now()}`, ts: Date.now(), type: "store_created", text: `Welcome — store "${store.name}" linked to your account`, storeId: id }, ...init.activity],
+    };
+  });
 
   // Flash clear
   useEffect(() => {
