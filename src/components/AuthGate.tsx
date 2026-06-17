@@ -1,11 +1,5 @@
-import { useEffect, useState } from "react";
-
-type Session = {
-  email: string;
-  fullName: string;
-  role: "user" | "admin";
-  storeName?: string;
-};
+import { useEffect, useRef, useState } from "react";
+import { SessionProvider, type Session } from "@/lib/session-context";
 
 const KEY = "fp_session_v1";
 const ACCOUNTS_KEY = "fp_accounts_v1";
@@ -21,6 +15,7 @@ type Account = {
   unitSystem: string;
   language: string;
   notifications: boolean;
+  avatarDataUrl?: string;
 };
 
 function loadAccounts(): Account[] {
@@ -61,33 +56,13 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (session) {
     return (
-      <div className="relative">
-        <div className="fixed top-3 right-3 z-[60] flex items-center gap-2 rounded-full bg-white/95 backdrop-blur border border-slate-200 shadow-sm px-3 py-1.5 text-xs">
-          <div className="h-6 w-6 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white grid place-items-center font-semibold">
-            {session.fullName.charAt(0).toUpperCase()}
-          </div>
-          <div className="leading-tight">
-            <div className="font-semibold text-slate-800">{session.fullName}</div>
-            <div className="text-[10px] text-slate-500 uppercase tracking-wide">
-              {session.role === "admin" ? "Administrator" : session.storeName || "User"}
-            </div>
-          </div>
-          <button
-            onClick={logout}
-            className="ml-1 text-slate-400 hover:text-rose-600 transition-colors"
-            title="Sign out"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-          </button>
-        </div>
+      <SessionProvider value={{ session, signOut: logout }}>
         {children}
-      </div>
+      </SessionProvider>
     );
   }
 
-  return (
-    <AuthShell mode={mode} setMode={setMode} onLogin={login} />
-  );
+  return <AuthShell mode={mode} setMode={setMode} onLogin={login} />;
 }
 
 function AuthShell({
@@ -186,6 +161,7 @@ function LoginForm({ onLogin, switchToSignup }: { onLogin: (s: Session) => void;
   const [email, setEmail] = useState("");
   const [pwd, setPwd] = useState("");
   const [err, setErr] = useState("");
+  const [forgot, setForgot] = useState(false);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -193,13 +169,13 @@ function LoginForm({ onLogin, switchToSignup }: { onLogin: (s: Session) => void;
     if (!email || !pwd) return setErr("Please enter your email and password.");
     const accounts = loadAccounts();
     const found = accounts.find((a) => a.email.toLowerCase() === email.toLowerCase());
-    // Demo: accept any account with matching password, or any creds when no account exists yet
     if (found && found.password !== pwd) return setErr("Incorrect password.");
     onLogin({
       email,
       fullName: found?.fullName || email.split("@")[0],
       role: "user",
       storeName: found?.storeName,
+      avatarDataUrl: found?.avatarDataUrl,
     });
   }
 
@@ -217,8 +193,12 @@ function LoginForm({ onLogin, switchToSignup }: { onLogin: (s: Session) => void;
         </Field>
         <Field label="Password">
           <input type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} placeholder="••••••••••••" className={inputCls} />
-          <div className="text-[11px] text-blue-600 hover:underline mt-1.5 cursor-pointer inline-block">Forgot password?</div>
+          <button type="button" onClick={() => setForgot(true)} className="text-[11px] text-blue-600 hover:underline mt-1.5">Forgot password?</button>
         </Field>
+
+        <div className="text-[11px] text-slate-500 bg-blue-50/60 border border-blue-100 rounded-lg px-3 py-2 leading-relaxed">
+          <span className="font-semibold text-blue-700">Demo mode:</span> any email & password works. Create an account to personalize your dashboard with your store.
+        </div>
 
         {err && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-2 rounded-lg">{err}</div>}
 
@@ -233,6 +213,44 @@ function LoginForm({ onLogin, switchToSignup }: { onLogin: (s: Session) => void;
           </button>
         </div>
       </form>
+
+      {forgot && <ForgotPasswordModal onClose={() => setForgot(false)} defaultEmail={email} />}
+    </div>
+  );
+}
+
+function ForgotPasswordModal({ onClose, defaultEmail }: { onClose: () => void; defaultEmail: string }) {
+  const [email, setEmail] = useState(defaultEmail);
+  const [sent, setSent] = useState(false);
+  return (
+    <div className="fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm grid place-items-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-bold text-slate-900">Reset your password</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+        {!sent ? (
+          <>
+            <p className="text-xs text-slate-500 mb-4">Enter your email and we'll send a reset link (simulated in this demo).</p>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@retailer.com" className={inputCls} autoFocus />
+            <button
+              onClick={() => email && setSent(true)}
+              className="w-full mt-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-sm font-semibold rounded-lg shadow hover:shadow-md transition-all"
+            >
+              Send reset link
+            </button>
+          </>
+        ) : (
+          <div className="text-center py-4">
+            <div className="mx-auto h-12 w-12 rounded-full bg-emerald-100 grid place-items-center mb-3">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-emerald-600"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div className="text-sm font-semibold text-slate-800">Check your inbox</div>
+            <div className="text-xs text-slate-500 mt-1">A reset link has been sent to <span className="font-medium text-slate-700">{email}</span>.</div>
+            <button onClick={onClose} className="mt-4 text-xs font-semibold text-blue-600 hover:underline">Back to sign in</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -254,7 +272,16 @@ function SignupForm({ onLogin, switchToLogin }: { onLogin: (s: Session) => void;
     unitSystem: "Metric (kg, °C)",
     language: "English",
     notifications: true,
+    avatarDataUrl: "" as string,
   });
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  function pickAvatar(file?: File | null) {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return setErr("Avatar must be under 2MB.");
+    const reader = new FileReader();
+    reader.onload = () => setForm((f) => ({ ...f, avatarDataUrl: String(reader.result) }));
+    reader.readAsDataURL(file);
+  }
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   const tabs: { id: typeof tab; label: string; icon: string }[] = [
@@ -284,7 +311,7 @@ function SignupForm({ onLogin, switchToLogin }: { onLogin: (s: Session) => void;
     }
     const account = { ...form };
     saveAccounts([...accounts, account]);
-    onLogin({ email: form.email, fullName: form.fullName, role: "user", storeName: form.storeName });
+    onLogin({ email: form.email, fullName: form.fullName, role: "user", storeName: form.storeName, avatarDataUrl: form.avatarDataUrl || undefined });
   }
 
   return (
@@ -319,13 +346,30 @@ function SignupForm({ onLogin, switchToLogin }: { onLogin: (s: Session) => void;
           <div className="flex flex-col md:flex-row gap-8 items-start">
             <div className="mx-auto md:mx-0 flex-shrink-0">
               <div className="relative">
-                <div className="h-32 w-32 rounded-full bg-gradient-to-br from-slate-300 to-slate-400 grid place-items-center text-white text-4xl font-bold shadow-md">
-                  {(form.fullName || "?").charAt(0).toUpperCase()}
+                <div className="h-32 w-32 rounded-full bg-gradient-to-br from-slate-300 to-slate-400 grid place-items-center text-white text-4xl font-bold shadow-md overflow-hidden">
+                  {form.avatarDataUrl ? (
+                    <img src={form.avatarDataUrl} alt="avatar" className="h-full w-full object-cover" />
+                  ) : (
+                    (form.fullName || "?").charAt(0).toUpperCase()
+                  )}
                 </div>
-                <button type="button" className="absolute bottom-1 right-1 h-8 w-8 rounded-full bg-white border border-slate-200 grid place-items-center shadow-md hover:bg-slate-50">
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => pickAvatar(e.target.files?.[0])}
+                />
+                <button
+                  type="button"
+                  onClick={() => avatarInputRef.current?.click()}
+                  className="absolute bottom-1 right-1 h-8 w-8 rounded-full bg-white border border-slate-200 grid place-items-center shadow-md hover:bg-slate-50"
+                  title="Upload photo"
+                >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-600"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
                 </button>
               </div>
+              <div className="text-[10.5px] text-slate-500 text-center mt-2 max-w-[8rem]">Click pencil to upload</div>
             </div>
 
             <div className="flex-1 w-full space-y-4">

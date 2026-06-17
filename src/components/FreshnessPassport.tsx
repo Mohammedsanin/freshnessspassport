@@ -27,6 +27,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useSession } from "@/lib/session-context";
 
 /* ============================================================
    TOKENS
@@ -2444,8 +2445,51 @@ function Header({ state, dispatch }: PageProps) {
         )}
       </div>
 
-      <div className="w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-bold" style={{ background: C.primary, color: "#fff" }}>AV</div>
+      <UserMenu />
     </header>
+  );
+}
+
+function UserMenu() {
+  const { session, signOut } = useSession();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (open && ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  if (!session) {
+    return <div className="w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-bold" style={{ background: C.primary, color: "#fff" }}>AV</div>;
+  }
+  const initials = session.fullName.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("") || "U";
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen((v) => !v)} className="w-9 h-9 rounded-full overflow-hidden ring-2 ring-transparent hover:ring-slate-200 transition-all" title={session.fullName}>
+        {session.avatarDataUrl ? (
+          <img src={session.avatarDataUrl} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full grid place-items-center text-[12px] font-bold text-white" style={{ background: session.role === "admin" ? "linear-gradient(135deg,#0f172a,#4338ca)" : "linear-gradient(135deg,#2563eb,#4f46e5)" }}>{initials}</div>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-[240px] bg-white border rounded-xl shadow-xl z-50 overflow-hidden" style={{ borderColor: C.border }}>
+          <div className="px-3.5 py-3 border-b" style={{ borderColor: C.border }}>
+            <div className="text-[13px] font-semibold" style={{ color: C.text }}>{session.fullName}</div>
+            <div className="text-[11px] truncate" style={{ color: C.muted }}>{session.email}</div>
+            <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider" style={{ background: session.role === "admin" ? "#FEF3C7" : "#DBEAFE", color: session.role === "admin" ? "#92400E" : "#1E40AF" }}>
+              {session.role === "admin" ? "Administrator" : session.storeName || "User"}
+            </div>
+          </div>
+          <button onClick={() => { setOpen(false); signOut(); }} className="w-full text-left px-3.5 py-2.5 text-[13px] hover:bg-rose-50 text-rose-600 flex items-center gap-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2530,7 +2574,35 @@ function ActivityLogModal({ state, dispatch }: PageProps) {
    ROOT
    ============================================================ */
 export default function FreshnessPassport() {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const { session } = useSession();
+  const [state, dispatch] = useReducer(reducer, initialState, (init) => {
+    if (!session || session.role === "admin" || !session.storeName) return init;
+    const exists = init.stores.some((s) => s.name.toLowerCase() === session.storeName!.toLowerCase());
+    if (exists) return init;
+    const id = `s${Date.now().toString(36)}`;
+    const store: Store = {
+      id,
+      code: session.storeName.slice(0, 3).toUpperCase().padEnd(3, "X") + "-01",
+      name: session.storeName,
+      city: "—",
+      region: "—",
+      address: "—",
+      country: "—",
+      postcode: "—",
+      manager: session.fullName,
+      email: session.email,
+      phone: "—",
+      activeSince: Date.now(),
+      tier: "Pilot",
+      type: "Supermarket",
+    };
+    return {
+      ...init,
+      stores: [...init.stores, store],
+      activeStoreFilter: id,
+      activity: [{ id: `a${Date.now()}`, ts: Date.now(), type: "store_created" as const, text: `Welcome — store "${store.name}" linked to your account`, storeId: id }, ...init.activity],
+    };
+  });
 
   // Flash clear
   useEffect(() => {
