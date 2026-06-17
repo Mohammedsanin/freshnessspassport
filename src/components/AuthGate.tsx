@@ -311,7 +311,7 @@ function SignupForm({ onLogin, switchToLogin }: { onLogin: (s: Session) => void;
     }
     const account = { ...form };
     saveAccounts([...accounts, account]);
-    onLogin({ email: form.email, fullName: form.fullName, role: "user", storeName: form.storeName });
+    onLogin({ email: form.email, fullName: form.fullName, role: "user", storeName: form.storeName, avatarDataUrl: form.avatarDataUrl || undefined });
   }
 
   return (
