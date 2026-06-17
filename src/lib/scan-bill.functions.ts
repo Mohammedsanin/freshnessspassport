@@ -68,7 +68,8 @@ export const scanBill = createServerFn({ method: "POST" })
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       if (res.status === 429) throw new Error("Rate limit reached — please retry shortly.");
-      if (res.status === 402) throw new Error("AI credits exhausted — please upgrade your workspace.");
+      if (res.status === 402)
+        throw new Error("AI credits exhausted — please upgrade your workspace.");
       throw new Error(`Gateway error ${res.status}: ${errText.slice(0, 200)}`);
     }
 
@@ -76,7 +77,10 @@ export const scanBill = createServerFn({ method: "POST" })
     const raw: string = payload?.choices?.[0]?.message?.content ?? "";
     let cleaned = raw.trim();
     // Strip code fences if any
-    cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    cleaned = cleaned
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
     // Extract first {...} block as a fallback
     if (!cleaned.startsWith("{")) {
       const m = cleaned.match(/\{[\s\S]*\}/);
