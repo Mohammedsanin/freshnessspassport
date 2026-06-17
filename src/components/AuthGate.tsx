@@ -255,23 +255,6 @@ function ForgotPasswordModal({ onClose, defaultEmail }: { onClose: () => void; d
   );
 }
 
-        {err && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-2 rounded-lg">{err}</div>}
-
-        <button type="submit" className="w-full py-2.5 mt-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-sm font-semibold rounded-lg shadow-md hover:shadow-lg hover:from-blue-700 hover:to-indigo-700 transition-all">
-          Sign In →
-        </button>
-
-        <div className="text-center text-xs text-slate-500 pt-2">
-          New here?{" "}
-          <button type="button" onClick={switchToSignup} className="text-blue-600 font-semibold hover:underline">
-            Create your account
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
 function SignupForm({ onLogin, switchToLogin }: { onLogin: (s: Session) => void; switchToLogin: () => void }) {
   const [tab, setTab] = useState<"essentials" | "store" | "prefs">("essentials");
   const [err, setErr] = useState("");
