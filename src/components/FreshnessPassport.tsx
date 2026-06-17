@@ -27,6 +27,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useSession } from "@/lib/session-context";
 
 /* ============================================================
    TOKENS
